@@ -10,8 +10,11 @@ services:
   example:
     platform: linux/amd64
     image: strangesast/fwlib-example
+    network_mode: host
     build:
       context: .
       dockerfile: examples/c-minimal/Dockerfile
     depends_on:
       - fwlib
+    environment:
+      MACHINE_HOST: "192.168.10.210"
