@@ -1,6 +1,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
+
 #include "../../fwlib32.h"
 
 #define MACHINE_PORT 8193
@@ -82,14 +88,22 @@ static void afficher_etat(const char *nom, short code, const char *texte) {
   printf("%-12s : %s (code %d)\n", nom, texte, (int)code);
 }
 
-int main(void) {
-  int allocated = 0;
-  int ret = 0;
-  unsigned short libh;
+static void attendre_60_secondes(void) {
+#ifdef _WIN32
+  Sleep(60000);
+#else
+  sleep(60);
+#endif
+}
 
+int main(void) {
+  int ret;
+  unsigned short libh;
   const char *machine_host = getenv("MACHINE_HOST");
+
   if (machine_host == NULL || machine_host[0] == '\0') {
-    fprintf(stderr, "Adresse IP manquante : définissez la variable MACHINE_HOST.\n");
+    fprintf(stderr,
+            "Adresse IP manquante : définissez la variable MACHINE_HOST.\n");
     return EXIT_FAILURE;
   }
 
@@ -105,47 +119,43 @@ int main(void) {
   ret = cnc_allclibhndl3(machine_host, MACHINE_PORT, 10, &libh);
   if (ret != EW_OK) {
     fprintf(stderr, "Échec de connexion à la CNC (code %d)\n", ret);
-    ret = EXIT_FAILURE;
-    goto cleanup;
+#ifndef _WIN32
+    cnc_exitprocess();
+#endif
+    return EXIT_FAILURE;
   }
-  allocated = 1;
 
-  {
+  for (;;) {
     ODBST status = {0};
 
     ret = cnc_statinfo(libh, &status);
     if (ret != EW_OK) {
       fprintf(stderr, "Échec de lecture de l’état CNC (code %d)\n", ret);
-      ret = EXIT_FAILURE;
-      goto cleanup;
+    } else {
+      printf("\nÉtat de la CNC :\n");
+      afficher_etat("Mode", status.aut, libelle_mode(status.aut));
+      afficher_etat("Exécution", status.run,
+                    libelle_execution(status.run));
+      afficher_etat("Mouvement", status.motion,
+                    libelle_mouvement(status.motion));
+      afficher_etat("M/S/T/B", status.mstb, libelle_mstb(status.mstb));
+      afficher_etat("Urgence", status.emergency,
+                    libelle_urgence(status.emergency));
+      afficher_etat("Alarme", status.alarm, libelle_alarme(status.alarm));
+      afficher_etat("Édition", status.edit, libelle_edition(status.edit));
+      fflush(stdout);
     }
 
-    printf("\nÉtat de la CNC :\n");
-    afficher_etat("Mode", status.aut, libelle_mode(status.aut));
-    afficher_etat("Exécution", status.run,
-                  libelle_execution(status.run));
-    afficher_etat("Mouvement", status.motion,
-                  libelle_mouvement(status.motion));
-    afficher_etat("M/S/T/B", status.mstb, libelle_mstb(status.mstb));
-    afficher_etat("Urgence", status.emergency,
-                  libelle_urgence(status.emergency));
-    afficher_etat("Alarme", status.alarm, libelle_alarme(status.alarm));
-    afficher_etat("Édition", status.edit, libelle_edition(status.edit));
+    attendre_60_secondes();
   }
 
-  ret = EXIT_SUCCESS;
-
-cleanup:
-  if (allocated && cnc_freelibhndl(libh) != EW_OK) {
-    fprintf(stderr, "Échec de libération du handle FOCAS\n");
-    if (ret == EXIT_SUCCESS) {
-      ret = EXIT_FAILURE;
-    }
-  }
+  /* Cette partie n’est pas atteinte avec la boucle infinie.
+     La libération du handle nécessiterait une gestion explicite de Ctrl+C. */
+  cnc_freelibhndl(libh);
 
 #ifndef _WIN32
   cnc_exitprocess();
 #endif
 
-  return ret;
+  return EXIT_SUCCESS;
 }
