@@ -3,7 +3,6 @@
 
 #include "../../fwlib32.h"
 
-#define DEFAULT_MACHINE_HOST "127.0.0.1"
 #define MACHINE_PORT 8193
 
 /* Libellés usuels FOCAS : à confirmer selon le modèle FANUC. */
@@ -89,8 +88,9 @@ int main(void) {
   unsigned short libh;
 
   const char *machine_host = getenv("MACHINE_HOST");
-  if (machine_host == NULL) {
-    machine_host = DEFAULT_MACHINE_HOST;
+  if (machine_host == NULL || machine_host[0] == '\0') {
+    fprintf(stderr, "Adresse IP manquante : définissez la variable MACHINE_HOST.\n");
+    return EXIT_FAILURE;
   }
 
 #ifndef _WIN32
