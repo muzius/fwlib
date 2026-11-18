@@ -1,54 +1,62 @@
 #include <stdio.h>
-#include <stdint.h>
 #include <stdlib.h>
-#include <string.h>
 
 #include "../../fwlib32.h"
+
 #define DEFAULT_MACHINE_HOST "127.0.0.1"
 #define MACHINE_PORT 8193
 
-int main(int argc, char *argv[]) {
+int main(void) {
   int allocated = 0;
   int ret = 0;
   unsigned short libh;
-  char cnc_id[40] = "";
-  uint32_t cnc_ids[4];
+  ODBST status = {0};
 
-  const char *MACHINE_HOST = getenv("MACHINE_HOST");
-  if (MACHINE_HOST == NULL) {
-    MACHINE_HOST = DEFAULT_MACHINE_HOST;
+  const char *machine_host = getenv("MACHINE_HOST");
+  if (machine_host == NULL) {
+    machine_host = DEFAULT_MACHINE_HOST;
   }
 
 #ifndef _WIN32
   if (cnc_startupprocess(0, "focas.log") != EW_OK) {
-    fprintf(stderr, "Failed to create required log file!\n");
-    return 1;
+    fprintf(stderr, "Impossible de créer focas.log\n");
+    return EXIT_FAILURE;
   }
 #endif
 
-  printf("connecting to machine at %s:%d...\n", MACHINE_HOST, MACHINE_PORT);
-  if ((ret = cnc_allclibhndl3(MACHINE_HOST, MACHINE_PORT, 10, &libh)) != EW_OK) {
-    fprintf(stderr, "Failed to connect to cnc! (%d)\n", ret);
-    ret = 1;
+  printf("Connexion à %s:%d...\n", machine_host, MACHINE_PORT);
+
+  ret = cnc_allclibhndl3(machine_host, MACHINE_PORT, 10, &libh);
+  if (ret != EW_OK) {
+    fprintf(stderr, "Connexion à la CNC impossible (code %d)\n", ret);
     goto cleanup;
   }
   allocated = 1;
 
-  if (cnc_rdcncid(libh, (unsigned long *)cnc_ids) != EW_OK) {
-    fprintf(stderr, "Failed to read cnc id!\n");
-    ret = 1;
+  ret = cnc_statinfo(libh, &status);
+  if (ret != EW_OK) {
+    fprintf(stderr, "Lecture de l’état CNC impossible (code %d)\n", ret);
     goto cleanup;
   }
 
-  snprintf(cnc_id, 40, "%08x-%08x-%08x-%08x", cnc_ids[0], cnc_ids[1],
-           cnc_ids[2], cnc_ids[3]);
+  printf("Mode T/M : %d\n", status.tmmode);
+  printf("Mode automatique : %d\n", status.aut);
+  printf("État d’exécution : %d\n", status.run);
+  printf("Mouvement / temporisation : %d\n", status.motion);
+  printf("État M/S/T/B : %d\n", status.mstb);
+  printf("Arrêt d’urgence : %d\n", status.emergency);
+  printf("Alarme : %d\n", status.alarm);
+  printf("Édition : %d\n", status.edit);
+
+  ret = EXIT_SUCCESS;
 
 cleanup:
-  if (allocated && cnc_freelibhndl(libh) != EW_OK)
-    fprintf(stderr, "Failed to free library handle!\n");
+  if (allocated && cnc_freelibhndl(libh) != EW_OK) {
+    fprintf(stderr, "Échec de libération du handle FOCAS\n");
+  }
 #ifndef _WIN32
   cnc_exitprocess();
 #endif
 
-  printf("machine id: %s\n", cnc_id);
+  return ret == EXIT_SUCCESS ? EXIT_SUCCESS : EXIT_FAILURE;
 }
