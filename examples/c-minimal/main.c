@@ -7,6 +7,15 @@
 #include <unistd.h>
 #endif
 
+#include <signal.h>
+
+static volatile sig_atomic_t continuer = 1;
+
+static void gerer_sigint(int signal_recu) {
+  (void)signal_recu;
+  continuer = 0;
+}
+
 #include "../../fwlib32.h"
 
 #define MACHINE_PORT 8193
@@ -125,7 +134,9 @@ int main(void) {
     return EXIT_FAILURE;
   }
 
-  for (;;) {
+  signal(SIGINT, gerer_sigint);
+
+  while (continuer) {
     ODBST status = {0};
 
     ret = cnc_statinfo(libh, &status);
@@ -149,9 +160,13 @@ int main(void) {
     attendre_60_secondes();
   }
 
-  /* Cette partie n’est pas atteinte avec la boucle infinie.
-     La libération du handle nécessiterait une gestion explicite de Ctrl+C. */
   cnc_freelibhndl(libh);
+
+#ifndef _WIN32
+cnc_exitprocess();
+#endif
+
+return EXIT_SUCCESS;
 
 #ifndef _WIN32
   cnc_exitprocess();
