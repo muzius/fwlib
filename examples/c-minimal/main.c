@@ -11,12 +11,12 @@
 #include "../../fwlib32.h"
 
 #define MACHINE_PORT 8193
-#define NOMBRE_MACHINES 3
+#define MAX_MACHINES 100
 
 static volatile sig_atomic_t continuer = 1;
 
 typedef struct {
-    const char *numero;
+    int numero;
     const char *host;
     unsigned short handle;
     int handle_alloue;
@@ -130,12 +130,13 @@ static void interroger_machine(const Machine *machine)
 {
     ODBST status = {0};
 
-    printf("\n=== Machine %s — %s ===\n", machine->numero, machine->host);
+    printf("\n=== Machine %02d — %s ===\n",
+           machine->numero, machine->host);
 
     int code = cnc_statinfo(machine->handle, &status);
     if (code != EW_OK) {
         fprintf(stderr,
-                "Échec de lecture de l’état de la machine %s (code %d)\n",
+                "Échec de lecture de l’état de la machine %02d (code %d)\n",
                 machine->numero, code);
         return;
     }
@@ -144,26 +145,48 @@ static void interroger_machine(const Machine *machine)
     afficher_etat("Exécution", status.run, libelle_execution(status.run));
     afficher_etat("Mouvement", status.motion, libelle_mouvement(status.motion));
     afficher_etat("M/S/T/B", status.mstb, libelle_mstb(status.mstb));
-    afficher_etat("Urgence", status.emergency, libelle_urgence(status.emergency));
+    afficher_etat("Urgence", status.emergency,
+                  libelle_urgence(status.emergency));
     afficher_etat("Alarme", status.alarm, libelle_alarme(status.alarm));
     afficher_etat("Édition", status.edit, libelle_edition(status.edit));
 }
 
 int main(void)
 {
+    Machine machines[MAX_MACHINES] = {0};
+    int nombre_machines = 0;
     int ret = EXIT_SUCCESS;
-
-    Machine machines[NOMBRE_MACHINES] = {
-        { "01", getenv("MACHINE_01"), 0, 0 },
-        { "02", getenv("MACHINE_02"), 0, 0 },
-        { "03", getenv("MACHINE_03"), 0, 0 }
-    };
+    char nom_variable[16];
 
     /* Portainer envoie normalement SIGTERM à l’arrêt du conteneur. */
     signal(SIGINT, gerer_signal_arret);
 #ifndef _WIN32
     signal(SIGTERM, gerer_signal_arret);
 #endif
+
+    /*
+     * Recherche MACHINE_01, MACHINE_02, ... MACHINE_100.
+     * Les numéros peuvent être discontinus.
+     */
+    for (int numero = 1; numero <= MAX_MACHINES; ++numero) {
+        snprintf(nom_variable, sizeof(nom_variable), "MACHINE_%02d", numero);
+
+        const char *host = getenv(nom_variable);
+        if (host == NULL || host[0] == '\0') {
+            continue;
+        }
+
+        machines[nombre_machines].numero = numero;
+        machines[nombre_machines].host = host;
+        ++nombre_machines;
+    }
+
+    if (nombre_machines == 0) {
+        fprintf(stderr,
+                "Aucune machine configurée. Définissez au moins une variable "
+                "MACHINE_01 à MACHINE_100.\n");
+        return EXIT_FAILURE;
+    }
 
 #ifndef _WIN32
     if (cnc_startupprocess(0, "focas.log") != EW_OK) {
@@ -172,15 +195,9 @@ int main(void)
     }
 #endif
 
-    /* Connexion à chaque machine configurée. */
-    for (int i = 0; i < NOMBRE_MACHINES; ++i) {
-        if (machines[i].host == NULL || machines[i].host[0] == '\0') {
-            fprintf(stderr, "Adresse manquante : variable MACHINE_%s non définie.\n",
-                    machines[i].numero);
-            continue;
-        }
-
-        printf("Connexion à la machine %s (%s:%d)...\n",
+    /* Connexion aux machines configurées. */
+    for (int i = 0; i < nombre_machines; ++i) {
+        printf("Connexion à la machine %02d (%s:%d)...\n",
                machines[i].numero, machines[i].host, MACHINE_PORT);
         fflush(stdout);
 
@@ -188,7 +205,7 @@ int main(void)
                                     &machines[i].handle);
         if (code != EW_OK) {
             fprintf(stderr,
-                    "Échec de connexion à la machine %s (code %d)\n",
+                    "Échec de connexion à la machine %02d (code %d)\n",
                     machines[i].numero, code);
             ret = EXIT_FAILURE;
             continue;
@@ -198,7 +215,7 @@ int main(void)
     }
 
     while (continuer) {
-        for (int i = 0; i < NOMBRE_MACHINES && continuer; ++i) {
+        for (int i = 0; i < nombre_machines && continuer; ++i) {
             if (machines[i].handle_alloue) {
                 interroger_machine(&machines[i]);
             }
@@ -212,12 +229,12 @@ int main(void)
     }
 
     /* Libération des handles alloués. */
-    for (int i = 0; i < NOMBRE_MACHINES; ++i) {
+    for (int i = 0; i < nombre_machines; ++i) {
         if (machines[i].handle_alloue) {
             int code = cnc_freelibhndl(machines[i].handle);
             if (code != EW_OK) {
                 fprintf(stderr,
-                        "Échec de libération du handle de la machine %s "
+                        "Échec de libération du handle de la machine %02d "
                         "(code %d)\n",
                         machines[i].numero, code);
                 ret = EXIT_FAILURE;
