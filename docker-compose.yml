@@ -17,4 +17,6 @@ services:
     depends_on:
       - fwlib
     environment:
-      MACHINE_HOST: "192.168.10.210"
+      MACHINE_01: "192.168.10.210"
+      MACHINE_02: "192.168.10.211"
+      MACHINE_03: "192.168.10.212"

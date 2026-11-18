@@ -11,8 +11,16 @@
 #include "../../fwlib32.h"
 
 #define MACHINE_PORT 8193
+#define NOMBRE_MACHINES 3
 
 static volatile sig_atomic_t continuer = 1;
+
+typedef struct {
+    const char *numero;
+    const char *host;
+    unsigned short handle;
+    int handle_alloue;
+} Machine;
 
 static void gerer_signal_arret(int signal_recu)
 {
@@ -118,18 +126,38 @@ static void afficher_etat(const char *nom, short code, const char *texte)
     printf("%-12s : %s (code %d)\n", nom, texte, (int)code);
 }
 
+static void interroger_machine(const Machine *machine)
+{
+    ODBST status = {0};
+
+    printf("\n=== Machine %s — %s ===\n", machine->numero, machine->host);
+
+    int code = cnc_statinfo(machine->handle, &status);
+    if (code != EW_OK) {
+        fprintf(stderr,
+                "Échec de lecture de l’état de la machine %s (code %d)\n",
+                machine->numero, code);
+        return;
+    }
+
+    afficher_etat("Mode", status.aut, libelle_mode(status.aut));
+    afficher_etat("Exécution", status.run, libelle_execution(status.run));
+    afficher_etat("Mouvement", status.motion, libelle_mouvement(status.motion));
+    afficher_etat("M/S/T/B", status.mstb, libelle_mstb(status.mstb));
+    afficher_etat("Urgence", status.emergency, libelle_urgence(status.emergency));
+    afficher_etat("Alarme", status.alarm, libelle_alarme(status.alarm));
+    afficher_etat("Édition", status.edit, libelle_edition(status.edit));
+}
+
 int main(void)
 {
-    int ret = EXIT_FAILURE;
-    int handle_alloue = 0;
-    unsigned short libh = 0;
-    const char *machine_host = getenv("MACHINE_HOST");
+    int ret = EXIT_SUCCESS;
 
-    if (machine_host == NULL || machine_host[0] == '\0') {
-        fprintf(stderr,
-                "Adresse IP manquante : définissez la variable MACHINE_HOST.\n");
-        return EXIT_FAILURE;
-    }
+    Machine machines[NOMBRE_MACHINES] = {
+        { "01", getenv("MACHINE_01"), 0, 0 },
+        { "02", getenv("MACHINE_02"), 0, 0 },
+        { "03", getenv("MACHINE_03"), 0, 0 }
+    };
 
     /* Portainer envoie normalement SIGTERM à l’arrêt du conteneur. */
     signal(SIGINT, gerer_signal_arret);
@@ -144,53 +172,56 @@ int main(void)
     }
 #endif
 
-    printf("Connexion à la machine %s:%d...\n", machine_host, MACHINE_PORT);
-    fflush(stdout);
-
-    ret = cnc_allclibhndl3(machine_host, MACHINE_PORT, 10, &libh);
-    if (ret != EW_OK) {
-        fprintf(stderr, "Échec de connexion à la CNC (code %d)\n", ret);
-        ret = EXIT_FAILURE;
-        goto cleanup;
-    }
-
-    handle_alloue = 1;
-    ret = EXIT_SUCCESS;
-
-    while (continuer) {
-        ODBST status = {0};
-
-        int code = cnc_statinfo(libh, &status);
-        if (code != EW_OK) {
-            fprintf(stderr, "Échec de lecture de l’état CNC (code %d)\n", code);
-            ret = EXIT_FAILURE;
-        } else {
-            printf("\nÉtat de la CNC :\n");
-            afficher_etat("Mode", status.aut, libelle_mode(status.aut));
-            afficher_etat("Exécution", status.run,
-                          libelle_execution(status.run));
-            afficher_etat("Mouvement", status.motion,
-                          libelle_mouvement(status.motion));
-            afficher_etat("M/S/T/B", status.mstb, libelle_mstb(status.mstb));
-            afficher_etat("Urgence", status.emergency,
-                          libelle_urgence(status.emergency));
-            afficher_etat("Alarme", status.alarm,
-                          libelle_alarme(status.alarm));
-            afficher_etat("Édition", status.edit,
-                          libelle_edition(status.edit));
-            fflush(stdout);
+    /* Connexion à chaque machine configurée. */
+    for (int i = 0; i < NOMBRE_MACHINES; ++i) {
+        if (machines[i].host == NULL || machines[i].host[0] == '\0') {
+            fprintf(stderr, "Adresse manquante : variable MACHINE_%s non définie.\n",
+                    machines[i].numero);
+            continue;
         }
 
-        attendre_60_secondes();
+        printf("Connexion à la machine %s (%s:%d)...\n",
+               machines[i].numero, machines[i].host, MACHINE_PORT);
+        fflush(stdout);
+
+        int code = cnc_allclibhndl3(machines[i].host, MACHINE_PORT, 10,
+                                    &machines[i].handle);
+        if (code != EW_OK) {
+            fprintf(stderr,
+                    "Échec de connexion à la machine %s (code %d)\n",
+                    machines[i].numero, code);
+            ret = EXIT_FAILURE;
+            continue;
+        }
+
+        machines[i].handle_alloue = 1;
     }
 
-cleanup:
-    if (handle_alloue) {
-        int code = cnc_freelibhndl(libh);
-        if (code != EW_OK) {
-            fprintf(stderr, "Échec de libération du handle FOCAS (code %d)\n",
-                    code);
-            ret = EXIT_FAILURE;
+    while (continuer) {
+        for (int i = 0; i < NOMBRE_MACHINES && continuer; ++i) {
+            if (machines[i].handle_alloue) {
+                interroger_machine(&machines[i]);
+            }
+        }
+
+        fflush(stdout);
+
+        if (continuer) {
+            attendre_60_secondes();
+        }
+    }
+
+    /* Libération des handles alloués. */
+    for (int i = 0; i < NOMBRE_MACHINES; ++i) {
+        if (machines[i].handle_alloue) {
+            int code = cnc_freelibhndl(machines[i].handle);
+            if (code != EW_OK) {
+                fprintf(stderr,
+                        "Échec de libération du handle de la machine %s "
+                        "(code %d)\n",
+                        machines[i].numero, code);
+                ret = EXIT_FAILURE;
+            }
         }
     }
 
