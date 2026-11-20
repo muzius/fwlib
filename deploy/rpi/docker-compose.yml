@@ -1,18 +1,11 @@
 services:
-  fwlib:
-    image: strangesast/fwlib
-    build:
-      context: .
-      dockerfile: Dockerfile
-
   example:
-    image: strangesast/fwlib-example
+    platform: linux/arm/v7
+    image: strangesast/fwlib-example-rpi
     build:
-      context: .
-      dockerfile: examples/c-minimal/Dockerfile
+      context: ../..
+      dockerfile: deploy/rpi/Dockerfile
     network_mode: host
-    depends_on:
-      - fwlib
     volumes:
       - focas-comm-conf:/config:ro
 
