@@ -4,11 +4,10 @@
 #include <string.h>
 #include <ctype.h>
 #include <errno.h>
+#include <time.h>
 
 #ifdef _WIN32
 #include <windows.h>
-#else
-#include <time.h>
 #endif
 
 #include "../../fwlib32.h"
@@ -226,25 +225,30 @@ static void afficher_tableau(const Machine machines[],
                              const ResultatMachine resultats[],
                              int nombre_machines)
 {
-    puts("|Machine|#:Etat  |#:Alarme|#:Mode|Edit |M/S/T/B|#:Urgence|IP            |");
+    puts("| Machine | État     | Alarme  | Mode     | Edit  | M/S/T/B | Urgence  | IP              | Heure    |");
 
     for (int i = 0; i < nombre_machines; ++i) {
+        char heure[9];
+        time_t maintenant = time(NULL);
+        struct tm *instant = localtime(&maintenant);
+
+        if (instant != NULL) {
+            strftime(heure, sizeof(heure), "%H:%M:%S", instant);
+        } else {
+            strcpy(heure, "--:--:--");
+        }
+
         if (!resultats[i].lu) {
-            printf("|CNC %-3d|%-9s|%-9s|%-9s|%-5s|%-9s|%-9s|%-14.14s|\n",
+            printf("| CNC %-3d | %-8s | %-7s | %-8s | %-5s | %-7s | %-8s | %-14.14s | %-8s |\n",
                    machines[i].numero,
-                   "Erreur",
-                   "-",
-                   "-",
-                   "-",
-                   "-",
-                   "-",
-                   machines[i].host);
+                   "Erreur", "-", "-", "-", "-", "-",
+                   machines[i].host, heure);
             continue;
         }
 
         const ODBST *s = &resultats[i].status;
 
-        printf("|CNC %-3d|%d:%-6s|%d:%-6s|%d:%-4s|%d:%-3s|%-7d|%d:%-7s|%-14.14s|\n",
+        printf("| CNC %-3d | %d:%-6s | %d:%-5s | %d:%-6s | %d:%-3s | %-7d | %d:%-6s | %-14.14s | %-8s |\n",
                machines[i].numero,
                (int)s->run, libelle_etat(s->run),
                (int)s->alarm, libelle_alarme_court(s->alarm),
@@ -252,10 +256,11 @@ static void afficher_tableau(const Machine machines[],
                (int)s->edit, libelle_oui_non(s->edit),
                (int)s->mstb,
                (int)s->emergency, libelle_urgence_court(s->emergency),
-               machines[i].host);
+               machines[i].host,
+               heure);
     }
 
-    puts("------------------------------------------------------------------------------------");
+    puts("---------------------------------------------------------------------------------------------------------------");
 }
 
 int main(void)
@@ -269,7 +274,6 @@ int main(void)
     signal(SIGTERM, gerer_signal_arret);
 #endif
 
-    /* Vérifie la configuration avant l’initialisation de FOCAS. */
     int nombre_machines = charger_configuration(machines, MAX_MACHINES);
     if (nombre_machines < 0) {
         return EXIT_FAILURE;
@@ -282,7 +286,6 @@ int main(void)
     }
 #endif
 
-    /* Connexion aux machines configurées. */
     for (int i = 0; i < nombre_machines; ++i) {
         printf("Connexion à CNC_%02d (%s:%d)...\n",
                machines[i].numero, machines[i].host, MACHINE_PORT);
@@ -329,7 +332,6 @@ int main(void)
         }
     }
 
-    /* Libère tous les handles qui ont été alloués. */
     for (int i = 0; i < nombre_machines; ++i) {
         if (machines[i].handle_alloue) {
             int code = cnc_freelibhndl(machines[i].handle);
