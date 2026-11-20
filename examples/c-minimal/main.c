@@ -225,7 +225,7 @@ static void afficher_tableau(const Machine machines[],
                              const ResultatMachine resultats[],
                              int nombre_machines)
 {
-    puts("| Machine | État     | Alarme  | Mode     | Edit  | M/S/T/B | Urgence  | IP              | Heure    |");
+    puts("| Machine | État     | Alarme  | Mode     | Edit  | M/S/T/B | Urgence  | IP             | Heure    |");
 
     for (int i = 0; i < nombre_machines; ++i) {
         char heure[9];
@@ -260,7 +260,7 @@ static void afficher_tableau(const Machine machines[],
                heure);
     }
 
-    puts("---------------------------------------------------------------------------------------------------------------");
+    puts("----------------------------------------------------------------------------------------------------");
 }
 
 int main(void)
