@@ -28,6 +28,11 @@ typedef struct {
     int handle_alloue;
 } Machine;
 
+typedef struct {
+    int lu;
+    ODBST status;
+} ResultatMachine;
+
 static void gerer_signal_arret(int signal_recu)
 {
     (void)signal_recu;
@@ -100,12 +105,14 @@ static int charger_configuration(Machine machines[], int capacite)
                 fclose(fichier);
                 return -1;
             }
+
             longueur = (size_t)(fin - p);
             if (longueur == 0 || longueur >= sizeof(host)) {
                 fprintf(stderr, "Adresse invalide, ligne %d\n", numero_ligne);
                 fclose(fichier);
                 return -1;
             }
+
             memcpy(host, p, longueur);
             host[longueur] = '\0';
         } else {
@@ -114,12 +121,14 @@ static int charger_configuration(Machine machines[], int capacite)
                    *fin != '#' && !isspace((unsigned char)*fin)) {
                 ++fin;
             }
+
             longueur = (size_t)(fin - p);
             if (longueur == 0 || longueur >= sizeof(host)) {
                 fprintf(stderr, "Adresse invalide, ligne %d\n", numero_ligne);
                 fclose(fichier);
                 return -1;
             }
+
             memcpy(host, p, longueur);
             host[longueur] = '\0';
         }
@@ -132,7 +141,8 @@ static int charger_configuration(Machine machines[], int capacite)
 
         for (int i = 0; i < nombre; ++i) {
             if (machines[i].numero == numero) {
-                fprintf(stderr, "CNC_%02d déclarée plusieurs fois (ligne %d)\n",
+                fprintf(stderr,
+                        "CNC_%02d déclarée plusieurs fois (ligne %d)\n",
                         numero, numero_ligne);
                 fclose(fichier);
                 return -1;
@@ -160,119 +170,98 @@ static int charger_configuration(Machine machines[], int capacite)
     return nombre;
 }
 
-/* Libellés usuels FOCAS, à confirmer selon le modèle FANUC. */
-static const char *libelle_mode(short v)
+static const char *libelle_etat(short v)
+{
+    switch (v) {
+        case 0: return "Reinit";
+        case 1: return "Stop";
+        case 2: return "Hold";
+        case 3: return "Start";
+        case 4: return "MSTR";
+        default: return "Inconnu";
+    }
+}
+
+static const char *libelle_alarme_court(short v)
+{
+    switch (v) {
+        case 0: return "Non";
+        case 1: return "CNC";
+        case 8: return "PMC";
+        default: return "Oui";
+    }
+}
+
+static const char *libelle_mode_court(short v)
 {
     switch (v) {
         case 0:  return "MDI";
-        case 1:  return "Mémoire (MEM)";
-        case 3:  return "Édition (EDIT)";
-        case 4:  return "Manivelle (HANDLE)";
+        case 1:  return "Mem";
+        case 3:  return "Edit";
+        case 4:  return "Handle";
         case 5:  return "JOG";
-        case 8:  return "Incrémental (INC)";
-        case 9:  return "Retour référence (REF)";
-        case 10: return "À distance (REMOTE)";
-        default: return "Mode inconnu ou dépendant du modèle";
+        case 8:  return "INC";
+        case 9:  return "REF";
+        case 10: return "Remote";
+        default: return "Inconnu";
     }
 }
 
-static const char *libelle_execution(short v)
+static const char *libelle_oui_non(short v)
+{
+    return v == 0 ? "Non" : "Oui";
+}
+
+static const char *libelle_urgence_court(short v)
 {
     switch (v) {
-        case 0: return "Réinitialisé";
-        case 1: return "Arrêté (STOP)";
-        case 2: return "Pause / maintien (HOLD)";
-        case 3: return "En marche (START)";
-        case 4: return "MSTR (état spécifique)";
-        default: return "État inconnu ou dépendant du modèle";
+        case 0: return "Non";
+        case 1: return "Oui";
+        case 2: return "Reinit";
+        default: return "Inconnu";
     }
 }
 
-static const char *libelle_mouvement(short v)
+static void afficher_tableau(const Machine machines[],
+                             const ResultatMachine resultats[],
+                             int nombre_machines)
 {
-    switch (v) {
-        case 0: return "Aucun mouvement / autre";
-        case 1: return "Mouvement d’axe";
-        case 2: return "Temporisation (DWELL)";
-        default: return "État inconnu ou dépendant du modèle";
-    }
-}
+    puts("|Machine|#:Etat  |#:Alarme|#:Mode|Edit |M/S/T/B|#:Urgence|IP            |");
 
-static const char *libelle_mstb(short v)
-{
-    switch (v) {
-        case 0: return "Autre / inactif";
-        case 1: return "Fin de fonction M/S/T/B (FIN)";
-        default: return "État inconnu ou dépendant du modèle";
-    }
-}
+    for (int i = 0; i < nombre_machines; ++i) {
+        if (!resultats[i].lu) {
+            printf("|CNC %-3d|%-8s|%-8s|%-6s|%-5s|%-7s|%-9s|%-14.14s|\n",
+                   machines[i].numero,
+                   "Erreur",
+                   "-",
+                   "-",
+                   "-",
+                   "-",
+                   "-",
+                   machines[i].host);
+            continue;
+        }
 
-static const char *libelle_urgence(short v)
-{
-    switch (v) {
-        case 0: return "Pas d’arrêt d’urgence signalé";
-        case 1: return "Arrêt d’urgence";
-        case 2: return "Réinitialisation";
-        default: return "État inconnu ou dépendant du modèle";
-    }
-}
+        const ODBST *s = &resultats[i].status;
 
-static const char *libelle_alarme(short v)
-{
-    switch (v) {
-        case 0: return "Aucune alarme / autre";
-        case 1: return "Alarme CNC";
-        case 8: return "Alarme PMC";
-        default: return "Alarme ou état à vérifier";
-    }
-}
-
-static const char *libelle_edition(short v)
-{
-    switch (v) {
-        case 0: return "Pas d’édition";
-        case 1: return "Édition de programme";
-        case 2: return "Recherche";
-        case 3: return "Sortie / transfert";
-        case 4: return "Entrée / transfert";
-        case 5: return "Comparaison";
-        default: return "Autre état d’édition";
-    }
-}
-
-static void afficher_etat(const char *nom, short code, const char *texte)
-{
-    printf("%-12s : %s (code %d)\n", nom, texte, (int)code);
-}
-
-static void interroger_machine(const Machine *machine)
-{
-    ODBST status = {0};
-
-    printf("\n=== Machine CNC_%02d — %s ===\n",
-           machine->numero, machine->host);
-
-    int code = cnc_statinfo(machine->handle, &status);
-    if (code != EW_OK) {
-        fprintf(stderr,
-                "Échec de lecture de CNC_%02d (code %d)\n",
-                machine->numero, code);
-        return;
+        printf("|CNC %-3d|%d:%-6s|%d:%-6s|%d:%-4s|%d:%-3s|%-7d|%d:%-7s|%-14.14s|\n",
+               machines[i].numero,
+               (int)s->run, libelle_etat(s->run),
+               (int)s->alarm, libelle_alarme_court(s->alarm),
+               (int)s->aut, libelle_mode_court(s->aut),
+               (int)s->edit, libelle_oui_non(s->edit),
+               (int)s->mstb,
+               (int)s->emergency, libelle_urgence_court(s->emergency),
+               machines[i].host);
     }
 
-    afficher_etat("Mode", status.aut, libelle_mode(status.aut));
-    afficher_etat("Exécution", status.run, libelle_execution(status.run));
-    afficher_etat("Mouvement", status.motion, libelle_mouvement(status.motion));
-    afficher_etat("M/S/T/B", status.mstb, libelle_mstb(status.mstb));
-    afficher_etat("Urgence", status.emergency,
-                  libelle_urgence(status.emergency));
-    afficher_etat("Alarme", status.alarm, libelle_alarme(status.alarm));
-    afficher_etat("Édition", status.edit, libelle_edition(status.edit));
+    puts("---------------------------------------------------------------------------");
 }
 
 int main(void)
 {
     Machine machines[MAX_MACHINES] = {0};
+    ResultatMachine resultats[MAX_MACHINES] = {0};
     int ret = EXIT_SUCCESS;
 
     signal(SIGINT, gerer_signal_arret);
@@ -280,7 +269,7 @@ int main(void)
     signal(SIGTERM, gerer_signal_arret);
 #endif
 
-    /* La configuration est vérifiée avant toute initialisation FOCAS. */
+    /* Vérifie la configuration avant l’initialisation de FOCAS. */
     int nombre_machines = charger_configuration(machines, MAX_MACHINES);
     if (nombre_machines < 0) {
         return EXIT_FAILURE;
@@ -293,6 +282,7 @@ int main(void)
     }
 #endif
 
+    /* Connexion aux machines configurées. */
     for (int i = 0; i < nombre_machines; ++i) {
         printf("Connexion à CNC_%02d (%s:%d)...\n",
                machines[i].numero, machines[i].host, MACHINE_PORT);
@@ -311,12 +301,27 @@ int main(void)
     }
 
     while (continuer) {
+        memset(resultats, 0, sizeof(resultats));
+
         for (int i = 0; i < nombre_machines && continuer; ++i) {
-            if (machines[i].handle_alloue) {
-                interroger_machine(&machines[i]);
+            if (!machines[i].handle_alloue) {
+                continue;
+            }
+
+            resultats[i].status = (ODBST){0};
+
+            int code = cnc_statinfo(machines[i].handle,
+                                    &resultats[i].status);
+            if (code == EW_OK) {
+                resultats[i].lu = 1;
+            } else {
+                fprintf(stderr,
+                        "Échec de lecture de CNC_%02d (code %d)\n",
+                        machines[i].numero, code);
             }
         }
 
+        afficher_tableau(machines, resultats, nombre_machines);
         fflush(stdout);
 
         if (continuer) {
@@ -324,12 +329,14 @@ int main(void)
         }
     }
 
+    /* Libère tous les handles qui ont été alloués. */
     for (int i = 0; i < nombre_machines; ++i) {
         if (machines[i].handle_alloue) {
             int code = cnc_freelibhndl(machines[i].handle);
             if (code != EW_OK) {
-                fprintf(stderr, "Échec de libération du handle CNC_%02d "
-                        "(code %d)\n", machines[i].numero, code);
+                fprintf(stderr,
+                        "Échec de libération du handle CNC_%02d (code %d)\n",
+                        machines[i].numero, code);
                 ret = EXIT_FAILURE;
             }
         }
