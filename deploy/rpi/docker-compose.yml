@@ -1,10 +1,10 @@
 services:
   example:
+    image: fwlib-example-rpi:latest
     platform: linux/arm/v7
-    image: strangesast/fwlib-example-rpi
     build:
       context: ../..
-      dockerfile: deploy/rpi/Dockerfile
+      dockerfile: examples/c-minimal/Dockerfile
     network_mode: host
     volumes:
       - focas-comm-conf:/config:ro
