@@ -1,20 +1,11 @@
 services:
-  fwlib:
-    platform: linux/amd64
-    image: strangesast/fwlib
-    build:
-      context: ../..
-      dockerfile: Dockerfile
-
   example:
     platform: linux/amd64
     image: strangesast/fwlib-example
-    network_mode: host
     build:
       context: ../..
       dockerfile: examples/c-minimal/Dockerfile
-    depends_on:
-      - fwlib
+    network_mode: host
     volumes:
       - focas-comm-conf:/config:ro
 
