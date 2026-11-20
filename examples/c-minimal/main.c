@@ -1,6 +1,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <signal.h>
+#include <string.h>
+#include <ctype.h>
+#include <errno.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -12,12 +15,15 @@
 
 #define MACHINE_PORT 8193
 #define MAX_MACHINES 100
+#define CONFIG_FILE "/config/liste-cnc.conf"
+#define MAX_LINE_LENGTH 256
+#define MAX_HOST_LENGTH 64
 
 static volatile sig_atomic_t continuer = 1;
 
 typedef struct {
     int numero;
-    const char *host;
+    char host[MAX_HOST_LENGTH];
     unsigned short handle;
     int handle_alloue;
 } Machine;
@@ -28,7 +34,6 @@ static void gerer_signal_arret(int signal_recu)
     continuer = 0;
 }
 
-/* Vérifie le signal d’arrêt toutes les secondes. */
 static void attendre_60_secondes(void)
 {
     for (int i = 0; i < 60 && continuer; ++i) {
@@ -41,7 +46,121 @@ static void attendre_60_secondes(void)
     }
 }
 
-/* Libellés usuels FOCAS : à confirmer selon le modèle FANUC. */
+/* Lit une ligne CNC_NN: "adresse IP" ; ignore les lignes vides et commentaires. */
+static int charger_configuration(Machine machines[], int capacite)
+{
+    FILE *fichier = fopen(CONFIG_FILE, "r");
+    if (fichier == NULL) {
+        fprintf(stderr, "Impossible d’ouvrir %s : %s\n",
+                CONFIG_FILE, strerror(errno));
+        return -1;
+    }
+
+    char ligne[MAX_LINE_LENGTH];
+    int nombre = 0;
+    int numero_ligne = 0;
+
+    while (fgets(ligne, sizeof(ligne), fichier) != NULL) {
+        ++numero_ligne;
+
+        char *p = ligne;
+        while (isspace((unsigned char)*p)) {
+            ++p;
+        }
+
+        if (*p == '\0' || *p == '#' || *p == '\n') {
+            continue;
+        }
+
+        int numero;
+        int position = 0;
+
+        if (sscanf(p, " CNC_%d : %n", &numero, &position) != 1 ||
+            position == 0 || numero < 1 || numero > 999) {
+            fprintf(stderr, "Format invalide dans %s, ligne %d\n",
+                    CONFIG_FILE, numero_ligne);
+            fclose(fichier);
+            return -1;
+        }
+
+        p += position;
+        while (isspace((unsigned char)*p)) {
+            ++p;
+        }
+
+        char host[MAX_HOST_LENGTH];
+        size_t longueur = 0;
+
+        if (*p == '"') {
+            ++p;
+            char *fin = strchr(p, '"');
+            if (fin == NULL) {
+                fprintf(stderr, "Adresse sans guillemet fermant, ligne %d\n",
+                        numero_ligne);
+                fclose(fichier);
+                return -1;
+            }
+            longueur = (size_t)(fin - p);
+            if (longueur == 0 || longueur >= sizeof(host)) {
+                fprintf(stderr, "Adresse invalide, ligne %d\n", numero_ligne);
+                fclose(fichier);
+                return -1;
+            }
+            memcpy(host, p, longueur);
+            host[longueur] = '\0';
+        } else {
+            char *fin = p;
+            while (*fin != '\0' && *fin != '\n' && *fin != '\r' &&
+                   *fin != '#' && !isspace((unsigned char)*fin)) {
+                ++fin;
+            }
+            longueur = (size_t)(fin - p);
+            if (longueur == 0 || longueur >= sizeof(host)) {
+                fprintf(stderr, "Adresse invalide, ligne %d\n", numero_ligne);
+                fclose(fichier);
+                return -1;
+            }
+            memcpy(host, p, longueur);
+            host[longueur] = '\0';
+        }
+
+        if (nombre >= capacite) {
+            fprintf(stderr, "Trop de machines : maximum %d\n", capacite);
+            fclose(fichier);
+            return -1;
+        }
+
+        for (int i = 0; i < nombre; ++i) {
+            if (machines[i].numero == numero) {
+                fprintf(stderr, "CNC_%02d déclarée plusieurs fois (ligne %d)\n",
+                        numero, numero_ligne);
+                fclose(fichier);
+                return -1;
+            }
+        }
+
+        machines[nombre].numero = numero;
+        strcpy(machines[nombre].host, host);
+        ++nombre;
+    }
+
+    if (ferror(fichier)) {
+        fprintf(stderr, "Erreur de lecture de %s\n", CONFIG_FILE);
+        fclose(fichier);
+        return -1;
+    }
+
+    fclose(fichier);
+
+    if (nombre == 0) {
+        fprintf(stderr, "Aucune CNC définie dans %s\n", CONFIG_FILE);
+        return -1;
+    }
+
+    return nombre;
+}
+
+/* Libellés usuels FOCAS, à confirmer selon le modèle FANUC. */
 static const char *libelle_mode(short v)
 {
     switch (v) {
@@ -130,13 +249,13 @@ static void interroger_machine(const Machine *machine)
 {
     ODBST status = {0};
 
-    printf("\n=== Machine %02d — %s ===\n",
+    printf("\n=== Machine CNC_%02d — %s ===\n",
            machine->numero, machine->host);
 
     int code = cnc_statinfo(machine->handle, &status);
     if (code != EW_OK) {
         fprintf(stderr,
-                "Échec de lecture de l’état de la machine %02d (code %d)\n",
+                "Échec de lecture de CNC_%02d (code %d)\n",
                 machine->numero, code);
         return;
     }
@@ -154,37 +273,16 @@ static void interroger_machine(const Machine *machine)
 int main(void)
 {
     Machine machines[MAX_MACHINES] = {0};
-    int nombre_machines = 0;
     int ret = EXIT_SUCCESS;
-    char nom_variable[16];
 
-    /* Portainer envoie normalement SIGTERM à l’arrêt du conteneur. */
     signal(SIGINT, gerer_signal_arret);
 #ifndef _WIN32
     signal(SIGTERM, gerer_signal_arret);
 #endif
 
-    /*
-     * Recherche MACHINE_01, MACHINE_02, ... MACHINE_100.
-     * Les numéros peuvent être discontinus.
-     */
-    for (int numero = 1; numero <= MAX_MACHINES; ++numero) {
-        snprintf(nom_variable, sizeof(nom_variable), "CNC_%02d", numero);
-
-        const char *host = getenv(nom_variable);
-        if (host == NULL || host[0] == '\0') {
-            continue;
-        }
-
-        machines[nombre_machines].numero = numero;
-        machines[nombre_machines].host = host;
-        ++nombre_machines;
-    }
-
-    if (nombre_machines == 0) {
-        fprintf(stderr,
-                "Aucune machine configurée. Définissez au moins une variable "
-                "MACHINE_01 à MACHINE_100.\n");
+    /* La configuration est vérifiée avant toute initialisation FOCAS. */
+    int nombre_machines = charger_configuration(machines, MAX_MACHINES);
+    if (nombre_machines < 0) {
         return EXIT_FAILURE;
     }
 
@@ -195,17 +293,15 @@ int main(void)
     }
 #endif
 
-    /* Connexion aux machines configurées. */
     for (int i = 0; i < nombre_machines; ++i) {
-        printf("Connexion à la machine %02d (%s:%d)...\n",
+        printf("Connexion à CNC_%02d (%s:%d)...\n",
                machines[i].numero, machines[i].host, MACHINE_PORT);
         fflush(stdout);
 
         int code = cnc_allclibhndl3(machines[i].host, MACHINE_PORT, 10,
                                     &machines[i].handle);
         if (code != EW_OK) {
-            fprintf(stderr,
-                    "Échec de connexion à la machine %02d (code %d)\n",
+            fprintf(stderr, "Échec de connexion à CNC_%02d (code %d)\n",
                     machines[i].numero, code);
             ret = EXIT_FAILURE;
             continue;
@@ -228,15 +324,12 @@ int main(void)
         }
     }
 
-    /* Libération des handles alloués. */
     for (int i = 0; i < nombre_machines; ++i) {
         if (machines[i].handle_alloue) {
             int code = cnc_freelibhndl(machines[i].handle);
             if (code != EW_OK) {
-                fprintf(stderr,
-                        "Échec de libération du handle de la machine %02d "
-                        "(code %d)\n",
-                        machines[i].numero, code);
+                fprintf(stderr, "Échec de libération du handle CNC_%02d "
+                        "(code %d)\n", machines[i].numero, code);
                 ret = EXIT_FAILURE;
             }
         }
