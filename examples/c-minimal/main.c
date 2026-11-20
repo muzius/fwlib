@@ -230,7 +230,7 @@ static void afficher_tableau(const Machine machines[],
 
     for (int i = 0; i < nombre_machines; ++i) {
         if (!resultats[i].lu) {
-            printf("|CNC %-3d|%-8s|%-8s|%-6s|%-5s|%-7s|%-9s|%-14.14s|\n",
+            printf("|CNC %-3d|%-9s|%-9s|%-9s|%-5s|%-9s|%-9s|%-14.14s|\n",
                    machines[i].numero,
                    "Erreur",
                    "-",
@@ -255,7 +255,7 @@ static void afficher_tableau(const Machine machines[],
                machines[i].host);
     }
 
-    puts("---------------------------------------------------------------------------");
+    puts("------------------------------------------------------------------------------------");
 }
 
 int main(void)
