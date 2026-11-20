@@ -169,7 +169,7 @@ int main(void)
      * Les numéros peuvent être discontinus.
      */
     for (int numero = 1; numero <= MAX_MACHINES; ++numero) {
-        snprintf(nom_variable, sizeof(nom_variable), "MACHINE_%02d", numero);
+        snprintf(nom_variable, sizeof(nom_variable), "CNC_%02d", numero);
 
         const char *host = getenv(nom_variable);
         if (host == NULL || host[0] == '\0') {
