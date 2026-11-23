@@ -1,7 +1,6 @@
 services:
   cnc-monitor:
     image: fwlib-monitor-rpi:latest
-    platform: linux/arm/v7
     build:
       context: ../..
       dockerfile: deploy/rpi/Dockerfile
