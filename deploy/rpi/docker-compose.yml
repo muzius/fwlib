@@ -1,11 +1,12 @@
 services:
-  example:
-    image: fwlib-example-rpi:latest
+  cnc-monitor:
+    image: fwlib-minimal-rpi:latest
     platform: linux/arm/v7
     build:
       context: ../..
-      dockerfile: examples/c-minimal/Dockerfile
+      dockerfile: deploy/rpi/Dockerfile
     network_mode: host
+    restart: unless-stopped
     volumes:
       - focas-comm-conf:/config:ro
 
