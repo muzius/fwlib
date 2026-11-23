@@ -1,7 +1,24 @@
-ARG image=debian:buster-slim
-FROM ${image}
+# Étape 1 : Build
+FROM gcc:bookworm AS builder
 
-WORKDIR /tmp/
-COPY libfwlib32* fwlib32.h scripts/install.sh ./
+COPY lib/libfwlib32-linux-x64.so.1.0.5 /usr/local/lib/
+RUN ln -s /usr/local/lib/libfwlib32-linux-x64.so.1.0.5 /usr/local/lib/libfwlib32.so && \
+    ln -s /usr/local/lib/libfwlib32-linux-x64.so.1.0.5 /usr/local/lib/libfwlib32.so.1 && \
+    ldconfig
 
-RUN ./install.sh
+WORKDIR /build
+COPY src/ ./
+
+RUN gcc -O2 main.c -L/usr/local/lib -Wl,-rpath=/usr/local/lib -lfwlib32 -lm -lpthread -o fanuc_monitor
+
+# Étape 2 : Runtime léger
+FROM debian:bookworm-slim
+
+COPY lib/libfwlib32-linux-x64.so.1.0.5 /usr/local/lib/
+RUN ln -s /usr/local/lib/libfwlib32-linux-x64.so.1.0.5 /usr/local/lib/libfwlib32.so && \
+    ln -s /usr/local/lib/libfwlib32-linux-x64.so.1.0.5 /usr/local/lib/libfwlib32.so.1 && \
+    ldconfig
+
+COPY --from=builder /build/fanuc_monitor /fanuc_monitor
+
+CMD ["/fanuc_monitor"]

@@ -1,6 +1,6 @@
 services:
   cnc-monitor:
-    image: fwlib-minimal-rpi:latest
+    image: fwlib-monitor-rpi:latest
     platform: linux/arm/v7
     build:
       context: ../..

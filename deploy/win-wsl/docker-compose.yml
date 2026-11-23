@@ -1,11 +1,11 @@
 services:
-  example:
-    platform: linux/amd64
-    image: strangesast/fwlib-example
+  cnc-monitor:
+    image: fwlib-monitor-wsl:latest
     build:
       context: ../..
-      dockerfile: examples/c-minimal/Dockerfile
+      dockerfile: deploy/win-wsl/Dockerfile
     network_mode: host
+    restart: unless-stopped
     volumes:
       - focas-comm-conf:/config:ro
 

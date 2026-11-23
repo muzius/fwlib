@@ -10,7 +10,7 @@
 #include <windows.h>
 #endif
 
-#include "../../fwlib32.h"
+#include "fwlib32.h"
 
 #define MACHINE_PORT 8193
 #define MAX_MACHINES 100
