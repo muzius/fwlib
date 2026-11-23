@@ -66,7 +66,7 @@ static void attendre_60_secondes(void)
     }
 }
 
-/* Supprime les espaces en début et fin de chaîne */
+/* Suppression des espaces de début et fin de chaîne */
 static char *trim(char *s)
 {
     while (isspace((unsigned char)*s)) s++;
@@ -77,139 +77,12 @@ static char *trim(char *s)
     return s;
 }
 
-/* Lecture du fichier /config/mqtt.conf */
-static int charger_configuration_mqtt(MqttBroker brokers[], int max_brokers)
-{
-    FILE *fichier = fopen(CONFIG_MQTT_FILE, "r");
-    if (fichier == NULL) {
-        fprintf(stderr, "Impossible d'ouvrir %s : %s\n",
-                CONFIG_MQTT_FILE, strerror(errno));
-        return -1;
-    }
-
-    char ligne[MAX_LINE_LENGTH];
-    int broker_idx = -1;
-
-    for (int i = 0; i < max_brokers; ++i) {
-        memset(&brokers[i], 0, sizeof(MqttBroker));
-        brokers[i].port = 1883;
-        strcpy(brokers[i].topic_prefix, "cnc");
-    }
-
-    while (fgets(ligne, sizeof(ligne), fichier) != NULL) {
-        char *p = trim(ligne);
-
-        if (*p == '\0' || *p == '#' || *p == ';') {
-            continue;
-        }
-
-        if (p[0] == '[' && p[strlen(p) - 1] == ']') {
-            p[strlen(p) - 1] = '\0';
-            p++;
-            int num = 0;
-            if (sscanf(p, "MQTT_%d", &num) == 1 && num >= 1 && num <= max_brokers) {
-                broker_idx = num - 1;
-                brokers[broker_idx].actif = 1;
-            } else {
-                broker_idx = -1;
-            }
-            continue;
-        }
-
-        if (broker_idx < 0 || broker_idx >= max_brokers) {
-            continue;
-        }
-
-        char *separateur = strchr(p, '=');
-        if (!separateur) continue;
-
-        *separateur = '\0';
-        char *cle = trim(p);
-        char *val = trim(separateur + 1);
-
-        if (strcmp(cle, "host") == 0) {
-            strncpy(brokers[broker_idx].host, val, sizeof(brokers[broker_idx].host) - 1);
-        } else if (strcmp(cle, "port") == 0) {
-            brokers[broker_idx].port = atoi(val);
-        } else if (strcmp(cle, "username") == 0) {
-            strncpy(brokers[broker_idx].username, val, sizeof(brokers[broker_idx].username) - 1);
-        } else if (strcmp(cle, "password") == 0) {
-            strncpy(brokers[broker_idx].password, val, sizeof(brokers[broker_idx].password) - 1);
-        } else if (strcmp(cle, "topic_prefix") == 0) {
-            strncpy(brokers[broker_idx].topic_prefix, val, sizeof(brokers[broker_idx].topic_prefix) - 1);
-        }
-    }
-
-    fclose(fichier);
-
-    int count = 0;
-    for (int i = 0; i < max_brokers; ++i) {
-        if (brokers[i].actif && strlen(brokers[i].host) > 0) {
-            count++;
-        } else {
-            brokers[i].actif = 0;
-        }
-    }
-
-    return count;
-}
-
-/* Initialise les connexions aux brokers MQTT configurés */
-static void init_mqtt_brokers(MqttBroker brokers[], int max_brokers)
-{
-    mosquitto_lib_init();
-
-    for (int i = 0; i < max_brokers; ++i) {
-        if (!brokers[i].actif) continue;
-
-        char client_id[32];
-        snprintf(client_id, sizeof(client_id), "fanuc_agent_%d_%d", i + 1, (int)time(NULL));
-
-        brokers[i].mosq = mosquitto_new(client_id, true, NULL);
-        if (!brokers[i].mosq) {
-            fprintf(stderr, "[MQTT_%d] Erreur d'allocation Mosquitto\n", i + 1);
-            continue;
-        }
-
-        if (strlen(brokers[i].username) > 0) {
-            mosquitto_username_pw_set(brokers[i].mosq,
-                                      brokers[i].username,
-                                      strlen(brokers[i].password) > 0 ? brokers[i].password : NULL);
-        }
-
-        int res = mosquitto_connect(brokers[i].mosq, brokers[i].host, brokers[i].port, 60);
-        if (res == MOSQ_ERR_SUCCESS) {
-            printf("[MQTT_%d] Connecté à %s:%d\n", i + 1, brokers[i].host, brokers[i].port);
-            mosquitto_loop_start(brokers[i].mosq);
-            brokers[i].connecte = 1;
-        } else {
-            fprintf(stderr, "[MQTT_%d] Échec connexion à %s:%d (%s)\n",
-                    i + 1, brokers[i].host, brokers[i].port, mosquitto_strerror(res));
-        }
-    }
-}
-
-/* Déconnexion propre des brokers */
-static void fermer_mqtt_brokers(MqttBroker brokers[], int max_brokers)
-{
-    for (int i = 0; i < max_brokers; ++i) {
-        if (brokers[i].mosq) {
-            mosquitto_loop_stop(brokers[i].mosq, true);
-            mosquitto_disconnect(brokers[i].mosq);
-            mosquitto_destroy(brokers[i].mosq);
-            brokers[i].mosq = NULL;
-            brokers[i].connecte = 0;
-        }
-    }
-    mosquitto_lib_cleanup();
-}
-
-/* Lit liste-cnc.conf */
-static int charger_configuration(Machine machines[], int capacite)
+/* Lit la liste des décolleteuses Fanuc */
+static int charger_configuration_cnc(Machine machines[], int capacite)
 {
     FILE *fichier = fopen(CONFIG_CNC_FILE, "r");
     if (fichier == NULL) {
-        fprintf(stderr, "Impossible d’ouvrir %s : %s\n", CONFIG_CNC_FILE, strerror(errno));
+        fprintf(stderr, "Impossible d'ouvrir %s : %s\n", CONFIG_CNC_FILE, strerror(errno));
         return -1;
     }
 
@@ -220,7 +93,7 @@ static int charger_configuration(Machine machines[], int capacite)
     while (fgets(ligne, sizeof(ligne), fichier) != NULL) {
         ++numero_ligne;
         char *p = ligne;
-        while (isspace((unsigned char)*p)) ++p;
+        while (isspace((unsigned char)*p)) p++;
 
         if (*p == '\0' || *p == '#' || *p == '\n') continue;
 
@@ -233,15 +106,15 @@ static int charger_configuration(Machine machines[], int capacite)
         }
 
         p += position;
-        while (isspace((unsigned char)*p)) ++p;
+        while (isspace((unsigned char)*p)) p++;
 
         char host[MAX_HOST_LENGTH];
         size_t longueur = 0;
 
         if (*p == '"') {
-            ++p;
+            p++;
             char *fin = strchr(p, '"');
-            if (fin == NULL) {
+            if (!fin) {
                 fprintf(stderr, "Adresse sans guillemet fermant, ligne %d\n", numero_ligne);
                 fclose(fichier);
                 return -1;
@@ -255,8 +128,8 @@ static int charger_configuration(Machine machines[], int capacite)
             host[longueur] = '\0';
         } else {
             char *fin = p;
-            while (*fin != '\0' && *fin != '\n' && *fin != '\r' && *fin != '#' && !isspace((unsigned char)*fin)) {
-                ++fin;
+            while (*fin && *fin != '\n' && *fin != '\r' && *fin != '#' && !isspace((unsigned char)*fin)) {
+                fin++;
             }
             longueur = (size_t)(fin - p);
             if (longueur == 0 || longueur >= sizeof(host)) {
@@ -268,131 +141,232 @@ static int charger_configuration(Machine machines[], int capacite)
         }
 
         if (nombre >= capacite) {
-            fprintf(stderr, "Trop de machines : max %d\n", capacite);
+            fprintf(stderr, "Trop de machines : maximum %d\n", capacite);
             fclose(fichier);
             return -1;
         }
 
         machines[nombre].numero = numero;
         strcpy(machines[nombre].host, host);
-        ++nombre;
+        nombre++;
     }
 
     fclose(fichier);
     return nombre;
 }
 
-static const char *libelle_etat(short v)
+/* Lit le fichier mqtt.conf */
+static int charger_configuration_mqtt(MqttBroker brokers[], int max_brokers)
 {
-    switch (v) {
-        case 0: return "Reinit";
-        case 1: return "Stop";
-        case 2: return "Hold";
-        case 3: return "Start";
-        case 4: return "MSTR";
-        default: return "Inconnu";
+    FILE *fichier = fopen(CONFIG_MQTT_FILE, "r");
+    if (fichier == NULL) {
+        fprintf(stderr, "Impossible d'ouvrir %s : %s\n", CONFIG_MQTT_FILE, strerror(errno));
+        return -1;
     }
-}
 
-static const char *libelle_alarme_court(short v)
-{
-    switch (v) {
-        case 0: return "Non";
-        case 1: return "CNC";
-        case 8: return "PMC";
-        default: return "Oui";
-    }
-}
-
-static const char *libelle_mode_court(short v)
-{
-    switch (v) {
-        case 0:  return "MDI";
-        case 1:  return "Mem";
-        case 3:  return "Edit";
-        case 4:  return "Handle";
-        case 5:  return "JOG";
-        case 8:  return "INC";
-        case 9:  return "REF";
-        case 10: return "Remote";
-        default: return "Inconnu";
-    }
-}
-
-static const char *libelle_urgence_court(short v)
-{
-    switch (v) {
-        case 0: return "Non";
-        case 1: return "Oui";
-        case 2: return "Reinit";
-        default: return "Inconnu";
-    }
-}
-
-/* Publie l'état d'une machine vers tous les brokers configurés */
-static void publier_mqtt(MqttBroker brokers[], int max_brokers,
-                         const Machine *machine, const ResultatMachine *res)
-{
-    char topic[256];
-    char payload[512];
-    time_t now = time(NULL);
-
-    if (res->lu) {
-        snprintf(payload, sizeof(payload),
-                 "{"
-                 "\"machine\":\"CNC_%02d\","
-                 "\"ip\":\"%s\","
-                 "\"online\":true,"
-                 "\"run\":%d,"
-                 "\"run_label\":\"%s\","
-                 "\"alarm\":%d,"
-                 "\"alarm_label\":\"%s\","
-                 "\"aut_mode\":%d,"
-                 "\"aut_label\":\"%s\","
-                 "\"edit\":%d,"
-                 "\"mstb\":%d,"
-                 "\"emergency\":%d,"
-                 "\"emergency_label\":\"%s\","
-                 "\"timestamp\":%ld"
-                 "}",
-                 machine->numero,
-                 machine->host,
-                 (int)res->status.run, libelle_etat(res->status.run),
-                 (int)res->status.alarm, libelle_alarme_court(res->status.alarm),
-                 (int)res->status.aut, libelle_mode_court(res->status.aut),
-                 (int)res->status.edit,
-                 (int)res->status.mstb,
-                 (int)res->status.emergency, libelle_urgence_court(res->status.emergency),
-                 (long)now);
-    } else {
-        snprintf(payload, sizeof(payload),
-                 "{"
-                 "\"machine\":\"CNC_%02d\","
-                 "\"ip\":\"%s\","
-                 "\"online\":false,"
-                 "\"timestamp\":%ld"
-                 "}",
-                 machine->numero,
-                 machine->host,
-                 (long)now);
-    }
+    char ligne[MAX_LINE_LENGTH];
+    int index_courant = -1;
 
     for (int i = 0; i < max_brokers; ++i) {
-        if (!brokers[i].actif || !brokers[i].mosq || !brokers[i].connecte) {
+        memset(&brokers[i], 0, sizeof(MqttBroker));
+        brokers[i].port = 1883;
+        strcpy(brokers[i].topic_prefix, "juradec/cnc");
+    }
+
+    while (fgets(ligne, sizeof(ligne), fichier) != NULL) {
+        char *p = trim(ligne);
+        if (*p == '\0' || *p == '#') continue;
+
+        if (*p == '[' && strchr(p, ']')) {
+            int broker_num = 0;
+            if (sscanf(p, "[MQTT_%d]", &broker_num) == 1 && broker_num >= 1 && broker_num <= max_brokers) {
+                index_courant = broker_num - 1;
+                brokers[index_courant].actif = 1;
+            } else {
+                index_courant = -1;
+            }
             continue;
         }
 
-        snprintf(topic, sizeof(topic), "%s/CNC_%02d/status",
-                 brokers[i].topic_prefix, machine->numero);
+        if (index_courant < 0) continue;
 
-        int code = mosquitto_publish(brokers[i].mosq, NULL, topic,
-                                     (int)strlen(payload), payload,
-                                     0, false);
-        if (code != MOSQ_ERR_SUCCESS) {
-            fprintf(stderr, "[MQTT_%d] Erreur d'envoi CNC_%02d : %s\n",
-                    i + 1, machine->numero, mosquitto_strerror(code));
+        char cle[64], valeur[128];
+        if (sscanf(p, "%63[^=]=%127[^\n]", cle, valeur) == 2) {
+            char *c = trim(cle);
+            char *v = trim(valeur);
+
+            if (strcmp(c, "host") == 0) {
+                strncpy(brokers[index_courant].host, v, sizeof(brokers[index_courant].host) - 1);
+            } else if (strcmp(c, "port") == 0) {
+                brokers[index_courant].port = atoi(v);
+            } else if (strcmp(c, "username") == 0) {
+                strncpy(brokers[index_courant].username, v, sizeof(brokers[index_courant].username) - 1);
+            } else if (strcmp(c, "password") == 0) {
+                strncpy(brokers[index_courant].password, v, sizeof(brokers[index_courant].password) - 1);
+            } else if (strcmp(c, "topic_prefix") == 0) {
+                strncpy(brokers[index_courant].topic_prefix, v, sizeof(brokers[index_courant].topic_prefix) - 1);
+            }
         }
     }
+
+    fclose(fichier);
+    return 0;
+}
+
+static void initialiser_mqtt(MqttBroker brokers[], int nb_brokers)
+{
+    mosquitto_lib_init();
+
+    for (int i = 0; i < nb_brokers; ++i) {
+        if (!brokers[i].actif || strlen(brokers[i].host) == 0) continue;
+
+        char client_id[64];
+        snprintf(client_id, sizeof(client_id), "fanuc_monitor_%d_%ld", i + 1, (long)time(NULL));
+
+        brokers[i].mosq = mosquitto_new(client_id, true, NULL);
+        if (!brokers[i].mosq) {
+            fprintf(stderr, "Erreur création client MQTT pour broker %d\n", i + 1);
+            continue;
+        }
+
+        if (strlen(brokers[i].username) > 0) {
+            mosquitto_username_pw_set(brokers[i].mosq, brokers[i].username,
+                                     strlen(brokers[i].password) > 0 ? brokers[i].password : NULL);
+        }
+
+        int rc = mosquitto_connect(brokers[i].mosq, brokers[i].host, brokers[i].port, 60);
+        if (rc == MOSQ_ERR_SUCCESS) {
+            brokers[i].connecte = 1;
+            mosquitto_loop_start(brokers[i].mosq);
+            printf("MQTT %d connecte a %s:%d\n", i + 1, brokers[i].host, brokers[i].port);
+        } else {
+            fprintf(stderr, "Echec de connexion MQTT %d (%s:%d): %s\n",
+                    i + 1, brokers[i].host, brokers[i].port, mosquitto_strerror(rc));
+        }
+    }
+}
+
+static void fermer_mqtt(MqttBroker brokers[], int nb_brokers)
+{
+    for (int i = 0; i < nb_brokers; ++i) {
+        if (brokers[i].mosq) {
+            if (brokers[i].connecte) {
+                mosquitto_loop_stop(brokers[i].mosq, true);
+                mosquitto_disconnect(brokers[i].mosq);
+            }
+            mosquitto_destroy(brokers[i].mosq);
+            brokers[i].mosq = NULL;
+        }
+    }
+    mosquitto_lib_cleanup();
+}
+
+static const char *libelle_etat(short v)
+{
+    switch (v) {
+        case 0: return "RESET";
+        case 1: return "STOP";
+        case 2: return "HOLD";
+        case 3: return "START";
+        case 4: return "MSTR";
+        default: return "UNKNOWN";
+    }
+}
+
+static const char *libelle_alarme(short v)
+{
+    switch (v) {
+        case 0: return "NONE";
+        case 1: return "CNC";
+        case 8: return "PMC";
+        default: return "YES";
+    }
+}
+
+static const char *libelle_mode(short v)
+{
+    switch (v) {
+        case 0:  return "MDI";
+        case 1:  return "MEM";
+        case 3:  return "EDIT";
+        case 4:  return "HANDLE";
+        case 5:  return "JOG";
+        case 8:  return "INC";
+        case 9:  return "REF";
+        case 10: return "REMOTE";
+        default: return "UNKNOWN";
+    }
+}
+
+static const char *libelle_urgence(short v)
+{
+    switch (v) {
+        case 0: return "CLEAR";
+        case 1: return "EMERGENCY";
+        case 2: return "RESET";
+        default: return "UNKNOWN";
+    }
+}
+
+/* Publie une valeur sous un topic MQTT specifique avec l'option retain activee */
+static void publier_valeur(MqttBroker brokers[], int nb_brokers,
+                           const char *base_topic, const char *subtopic, const char *valeur)
+{
+    char full_topic[256];
+    for (int i = 0; i < nb_brokers; ++i) {
+        if (brokers[i].actif && brokers[i].connecte && brokers[i].mosq) {
+            snprintf(full_topic, sizeof(full_topic), "%s/%s/%s", brokers[i].topic_prefix, base_topic, subtopic);
+            mosquitto_publish(brokers[i].mosq, NULL, full_topic, (int)strlen(valeur), valeur, 0, true);
+        }
+    }
+}
+
+/* Publication arborescente pour une machine donnee */
+static void publier_arborescence_mqtt(MqttBroker brokers[], int nb_brokers,
+                                      const Machine *m, const ResultatMachine *res)
+{
+    char machine_topic[32];
+    snprintf(machine_topic, sizeof(machine_topic), "CNC_%02d", m->numero);
+
+    char buffer[32];
+
+    // IP
+    publier_valeur(brokers, nb_brokers, machine_topic, "ip", m->host);
+
+    if (!res->lu) {
+        publier_valeur(brokers, nb_brokers, machine_topic, "online", "false");
+        return;
+    }
+
+    publier_valeur(brokers, nb_brokers, machine_topic, "online", "true");
+
+    // Run / État cycle
+    snprintf(buffer, sizeof(buffer), "%d", res->status.run);
+    publier_valeur(brokers, nb_brokers, machine_topic, "run", buffer);
+    publier_valeur(brokers, nb_brokers, machine_topic, "run_label", libelle_etat(res->status.run));
+
+    // Alarme
+    snprintf(buffer, sizeof(buffer), "%d", res->status.alarm);
+    publier_valeur(brokers, nb_brokers, machine_topic, "alarm", buffer);
+    publier_valeur(brokers, nb_brokers, machine_topic, "alarm_label", libelle_alarme(res->status.alarm));
+
+    // Mode (MDI, MEM, etc.)
+    snprintf(buffer, sizeof(buffer), "%d", res->status.aut);
+    publier_valeur(brokers, nb_brokers, machine_topic, "aut", buffer);
+    publier_valeur(brokers, nb_brokers, machine_topic, "aut_label", libelle_mode(res->status.aut));
+
+    // Édition programme
+    snprintf(buffer, sizeof(buffer), "%d", res->status.edit);
+    publier_valeur(brokers, nb_brokers, machine_topic, "edit", buffer);
+
+    // Fonction auxiliaire active (M/S/T/B)
+    snprintf(buffer, sizeof(buffer), "%d", res->status.mstb);
+    publier_valeur(brokers, nb_brokers, machine_topic, "mstb", buffer);
+
+    // Arrêt d'urgence
+    snprintf(buffer, sizeof(buffer), "%d", res->status.emergency);
+    publier_valeur(brokers, nb_brokers, machine_topic, "emergency", buffer);
+    publier_valeur(brokers, nb_brokers, machine_topic, "emergency_label", libelle_urgence(res->status.emergency));
 }
 
 int main(void)
@@ -400,38 +374,35 @@ int main(void)
     Machine machines[MAX_MACHINES] = {0};
     ResultatMachine resultats[MAX_MACHINES] = {0};
     MqttBroker brokers[MAX_MQTT_BROKERS];
-    int ret = EXIT_SUCCESS;
 
     signal(SIGINT, gerer_signal_arret);
 #ifndef _WIN32
     signal(SIGTERM, gerer_signal_arret);
 #endif
 
-    int nombre_machines = charger_configuration(machines, MAX_MACHINES);
+    int nombre_machines = charger_configuration_cnc(machines, MAX_MACHINES);
     if (nombre_machines < 0) {
         return EXIT_FAILURE;
     }
 
-    int nombre_brokers = charger_configuration_mqtt(brokers, MAX_MQTT_BROKERS);
-    printf("%d machine(s) et %d broker(s) MQTT charges.\n", nombre_machines, nombre_brokers);
-
-    init_mqtt_brokers(brokers, MAX_MQTT_BROKERS);
+    charger_configuration_mqtt(brokers, MAX_MQTT_BROKERS);
+    initialiser_mqtt(brokers, MAX_MQTT_BROKERS);
 
 #ifndef _WIN32
     if (cnc_startupprocess(0, "focas.log") != EW_OK) {
-        fprintf(stderr, "Impossible de creer focas.log\n");
-        fermer_mqtt_brokers(brokers, MAX_MQTT_BROKERS);
-        return EXIT_FAILURE;
+        fprintf(stderr, "Impossible de créer focas.log\n");
     }
 #endif
 
     for (int i = 0; i < nombre_machines; ++i) {
-        printf("Connexion a CNC_%02d (%s:%d)...\n", machines[i].numero, machines[i].host, MACHINE_PORT);
+        printf("Connexion à CNC_%02d (%s:%d)...\n",
+               machines[i].numero, machines[i].host, MACHINE_PORT);
         fflush(stdout);
 
         int code = cnc_allclibhndl3(machines[i].host, MACHINE_PORT, 10, &machines[i].handle);
         if (code != EW_OK) {
-            fprintf(stderr, "Echec de connexion a CNC_%02d (code %d)\n", machines[i].numero, code);
+            fprintf(stderr, "Échec de connexion à CNC_%02d (code %d)\n",
+                    machines[i].numero, code);
             continue;
         }
         machines[i].handle_alloue = 1;
@@ -442,19 +413,28 @@ int main(void)
 
         for (int i = 0; i < nombre_machines && continuer; ++i) {
             if (!machines[i].handle_alloue) {
-                publier_mqtt(brokers, MAX_MQTT_BROKERS, &machines[i], &resultats[i]);
-                continue;
+                // Tentative de reconnexion si déconnectée
+                int code = cnc_allclibhndl3(machines[i].host, MACHINE_PORT, 10, &machines[i].handle);
+                if (code == EW_OK) {
+                    machines[i].handle_alloue = 1;
+                }
             }
 
-            resultats[i].status = (ODBST){0};
-            int code = cnc_statinfo(machines[i].handle, &resultats[i].status);
-            if (code == EW_OK) {
-                resultats[i].lu = 1;
-            } else {
-                fprintf(stderr, "Echec de lecture CNC_%02d (code %d)\n", machines[i].numero, code);
+            if (machines[i].handle_alloue) {
+                resultats[i].status = (ODBST){0};
+                int code = cnc_statinfo(machines[i].handle, &resultats[i].status);
+                if (code == EW_OK) {
+                    resultats[i].lu = 1;
+                } else {
+                    fprintf(stderr, "Échec de lecture CNC_%02d (code %d)\n",
+                            machines[i].numero, code);
+                    cnc_freelibhndl(machines[i].handle);
+                    machines[i].handle_alloue = 0;
+                }
             }
 
-            publier_mqtt(brokers, MAX_MQTT_BROKERS, &machines[i], &resultats[i]);
+            // Publication sous forme d'arborescence MQTT
+            publier_arborescence_mqtt(brokers, MAX_MQTT_BROKERS, &machines[i], &resultats[i]);
         }
 
         if (continuer) {
@@ -472,7 +452,7 @@ int main(void)
     cnc_exitprocess();
 #endif
 
-    fermer_mqtt_brokers(brokers, MAX_MQTT_BROKERS);
+    fermer_mqtt(brokers, MAX_MQTT_BROKERS);
 
-    return ret;
+    return EXIT_SUCCESS;
 }
