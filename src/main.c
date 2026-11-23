@@ -35,6 +35,8 @@ typedef struct {
 typedef struct {
     int lu;
     ODBST status;
+    long part_count;        /* Compteur de pièces (paramètre #6711) */
+    long cycle_time_ms;     /* Temps de cycle en millisecondes (paramètre #6758 ou #6757) */
 } ResultatMachine;
 
 typedef struct {
@@ -66,7 +68,6 @@ static void attendre_60_secondes(void)
     }
 }
 
-/* Suppression des espaces de début et fin de chaîne */
 static char *trim(char *s)
 {
     while (isspace((unsigned char)*s)) s++;
@@ -77,7 +78,7 @@ static char *trim(char *s)
     return s;
 }
 
-/* Lit la liste des décolleteuses Fanuc */
+/* Lecture du fichier liste-cnc.conf */
 static int charger_configuration_cnc(Machine machines[], int capacite)
 {
     FILE *fichier = fopen(CONFIG_CNC_FILE, "r");
@@ -155,7 +156,7 @@ static int charger_configuration_cnc(Machine machines[], int capacite)
     return nombre;
 }
 
-/* Lit le fichier mqtt.conf */
+/* Lecture du fichier mqtt.conf */
 static int charger_configuration_mqtt(MqttBroker brokers[], int max_brokers)
 {
     FILE *fichier = fopen(CONFIG_MQTT_FILE, "r");
@@ -225,7 +226,7 @@ static void initialiser_mqtt(MqttBroker brokers[], int nb_brokers)
 
         brokers[i].mosq = mosquitto_new(client_id, true, NULL);
         if (!brokers[i].mosq) {
-            fprintf(stderr, "Erreur création client MQTT pour broker %d\n", i + 1);
+            fprintf(stderr, "Erreur création client MQTT broker %d\n", i + 1);
             continue;
         }
 
@@ -240,7 +241,7 @@ static void initialiser_mqtt(MqttBroker brokers[], int nb_brokers)
             mosquitto_loop_start(brokers[i].mosq);
             printf("MQTT %d connecte a %s:%d\n", i + 1, brokers[i].host, brokers[i].port);
         } else {
-            fprintf(stderr, "Echec de connexion MQTT %d (%s:%d): %s\n",
+            fprintf(stderr, "Echec connexion MQTT %d (%s:%d): %s\n",
                     i + 1, brokers[i].host, brokers[i].port, mosquitto_strerror(rc));
         }
     }
@@ -308,7 +309,7 @@ static const char *libelle_urgence(short v)
     }
 }
 
-/* Publie une valeur sous un topic MQTT specifique avec l'option retain activee */
+/* Publie une valeur avec retain = true */
 static void publier_valeur(MqttBroker brokers[], int nb_brokers,
                            const char *base_topic, const char *subtopic, const char *valeur)
 {
@@ -321,52 +322,104 @@ static void publier_valeur(MqttBroker brokers[], int nb_brokers,
     }
 }
 
-/* Publication arborescente pour une machine donnee */
+/* Lecture du compteur de pièces (paramètre Fanuc #6711) */
+static long lire_compteur_pieces(unsigned short handle)
+{
+    IODBPSD param;
+    short ret = cnc_rdparam(handle, 6711, 0, sizeof(param), &param);
+    if (ret == EW_OK) {
+        return param.u.ldata;
+    }
+    return -1;
+}
+
+/* Lecture du temps de cycle usiné (paramètre Fanuc #6758 en ms ou #6757) */
+static long lire_temps_cycle_ms(unsigned short handle)
+{
+    IODBPSD param;
+    /* #6758: Temps de cycle précédent / actuel en ms */
+    short ret = cnc_rdparam(handle, 6758, 0, sizeof(param), &param);
+    if (ret == EW_OK) {
+        return param.u.ldata;
+    }
+    /* Fallback sur #6757 si non disponible */
+    ret = cnc_rdparam(handle, 6757, 0, sizeof(param), &param);
+    if (ret == EW_OK) {
+        return param.u.ldata;
+    }
+    return -1;
+}
+
+/* Publication arborescente (sans topic "status", et "ip" positionné en dernier) */
 static void publier_arborescence_mqtt(MqttBroker brokers[], int nb_brokers,
                                       const Machine *m, const ResultatMachine *res)
 {
     char machine_topic[32];
     snprintf(machine_topic, sizeof(machine_topic), "CNC_%02d", m->numero);
 
-    char buffer[32];
+    char buffer[64];
 
-    // IP
-    publier_valeur(brokers, nb_brokers, machine_topic, "ip", m->host);
-
+    // 1. Online
     if (!res->lu) {
         publier_valeur(brokers, nb_brokers, machine_topic, "online", "false");
+        // IP toujours en dernier
+        publier_valeur(brokers, nb_brokers, machine_topic, "ip", m->host);
         return;
     }
 
     publier_valeur(brokers, nb_brokers, machine_topic, "online", "true");
 
-    // Run / État cycle
+    // 2. Run / Cycle status
     snprintf(buffer, sizeof(buffer), "%d", res->status.run);
     publier_valeur(brokers, nb_brokers, machine_topic, "run", buffer);
     publier_valeur(brokers, nb_brokers, machine_topic, "run_label", libelle_etat(res->status.run));
 
-    // Alarme
+    // 3. Alarme
     snprintf(buffer, sizeof(buffer), "%d", res->status.alarm);
     publier_valeur(brokers, nb_brokers, machine_topic, "alarm", buffer);
     publier_valeur(brokers, nb_brokers, machine_topic, "alarm_label", libelle_alarme(res->status.alarm));
 
-    // Mode (MDI, MEM, etc.)
+    // 4. Mode de fonctionnement
     snprintf(buffer, sizeof(buffer), "%d", res->status.aut);
     publier_valeur(brokers, nb_brokers, machine_topic, "aut", buffer);
     publier_valeur(brokers, nb_brokers, machine_topic, "aut_label", libelle_mode(res->status.aut));
 
-    // Édition programme
+    // 5. Édition programme
     snprintf(buffer, sizeof(buffer), "%d", res->status.edit);
     publier_valeur(brokers, nb_brokers, machine_topic, "edit", buffer);
 
-    // Fonction auxiliaire active (M/S/T/B)
+    // 6. Fonction auxiliaire active (M/S/T/B)
     snprintf(buffer, sizeof(buffer), "%d", res->status.mstb);
     publier_valeur(brokers, nb_brokers, machine_topic, "mstb", buffer);
 
-    // Arrêt d'urgence
+    // 7. Urgence
     snprintf(buffer, sizeof(buffer), "%d", res->status.emergency);
     publier_valeur(brokers, nb_brokers, machine_topic, "emergency", buffer);
     publier_valeur(brokers, nb_brokers, machine_topic, "emergency_label", libelle_urgence(res->status.emergency));
+
+    // 8. Compteur de pièces
+    if (res->part_count >= 0) {
+        snprintf(buffer, sizeof(buffer), "%ld", res->part_count);
+        publier_valeur(brokers, nb_brokers, machine_topic, "part_count", buffer);
+    }
+
+    // 9. Temps de cycle
+    if (res->cycle_time_ms >= 0) {
+        long total_sec = res->cycle_time_ms / 1000;
+        long minutes = total_sec / 60;
+        long secondes = total_sec % 60;
+
+        // Temps brut en secondes
+        snprintf(buffer, sizeof(buffer), "%ld", total_sec);
+        publier_valeur(brokers, nb_brokers, machine_topic, "cycle_time_sec", buffer);
+
+        // Temps formaté (MM:SS)
+        snprintf(buffer, sizeof(buffer), "%02ld:%02ld", minutes, secondes);
+        publier_valeur(brokers, nb_brokers, machine_topic, "cycle_time_formatted", buffer);
+    }
+
+    // 10. IP (publié en dernier)
+    publier_valeur(brokers, nb_brokers, machine_topic, "ip", m->host);
 }
 
 int main(void)
@@ -390,7 +443,7 @@ int main(void)
 
 #ifndef _WIN32
     if (cnc_startupprocess(0, "focas.log") != EW_OK) {
-        fprintf(stderr, "Impossible de créer focas.log\n");
+        fprintf(stderr, "Impossible d'initialiser focas.log\n");
     }
 #endif
 
@@ -413,7 +466,6 @@ int main(void)
 
         for (int i = 0; i < nombre_machines && continuer; ++i) {
             if (!machines[i].handle_alloue) {
-                // Tentative de reconnexion si déconnectée
                 int code = cnc_allclibhndl3(machines[i].host, MACHINE_PORT, 10, &machines[i].handle);
                 if (code == EW_OK) {
                     machines[i].handle_alloue = 1;
@@ -425,6 +477,10 @@ int main(void)
                 int code = cnc_statinfo(machines[i].handle, &resultats[i].status);
                 if (code == EW_OK) {
                     resultats[i].lu = 1;
+
+                    // Lecture du compteur de pièces et du temps de cycle
+                    resultats[i].part_count = lire_compteur_pieces(machines[i].handle);
+                    resultats[i].cycle_time_ms = lire_temps_cycle_ms(machines[i].handle);
                 } else {
                     fprintf(stderr, "Échec de lecture CNC_%02d (code %d)\n",
                             machines[i].numero, code);
@@ -433,7 +489,7 @@ int main(void)
                 }
             }
 
-            // Publication sous forme d'arborescence MQTT
+            // Publication MQTT arborescente
             publier_arborescence_mqtt(brokers, MAX_MQTT_BROKERS, &machines[i], &resultats[i]);
         }
 
