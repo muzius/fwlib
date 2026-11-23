@@ -7,8 +7,4 @@ services:
     network_mode: host
     restart: unless-stopped
     volumes:
-      - focas-comm-conf:/config:ro
-
-volumes:
-  focas-comm-conf:
-    external: true
+      - /mnt/dietpi_userdata/docker-data/volumes/focas-comm-conf:/config:ro
